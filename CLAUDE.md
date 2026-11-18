@@ -1,0 +1,47 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+A Claude Code **plugin marketplace** (`devnonla-mods`) holding "mods": plugins that extend Claude Code's own UI/behaviour through the engine's hook API. There is no `package.json`, bundler, or lint config — each mod is a folder of source loaded directly by the Claude Code engine. All text in this repo is English: READMEs, manifest descriptions, and user-visible strings in mods (toasts, pane text, command descriptions). Keep new text in English.
+
+- `.claude-plugin/marketplace.json` lists every mod; a new mod must be added to its `plugins` array (`source` is the mod's relative folder) and to the table in the root `README.md`.
+- Each mod folder is self-contained: `.claude-plugin/plugin.json` (name, version, `types` pointer), `hooks/hooks.json` (`{ "modules": ["./register.tsx"] }`), `hooks/register.tsx` (the module), optional `types/index.d.ts` and `hooks/*.test.tsx`.
+
+## Commands
+
+The `claude-code` and `claude-code/testing` imports are provided by the engine, not npm. Use the Claude Code CLI:
+
+```bash
+claude plugin validate devnonla-git-changes   # checks manifest + module source, incl. $.state keys against types/index.d.ts
+claude plugin test devnonla-git-changes       # runs hooks/*.test.tsx
+tsc -p devnonla-git-changes                   # type-check; works only after the engine has loaded the mod and written .claude-plugin/types/ (incl. tsconfig.json)
+```
+
+Checks run automatically in two places, so keep both passing:
+- `.claude/settings.json` registers a `PostToolUse` hook (`Edit|Write`) running `.claude/hooks/check-mod.sh`. When a file inside a mod folder changes, it runs `claude plugin validate` and `claude plugin test` for that mod and exits 2 (failure fed back to Claude) if either fails.
+- `.github/workflows/ci.yml` runs `claude plugin validate --strict` on the marketplace and on every mod folder, then `claude plugin test` per mod. `--strict` turns warnings into errors, so each `plugin.json` / marketplace entry needs an `author`, and each mod README needs the `/plugin install <mod> --marketplace devnonla/claude-mods` line.
+
+Install locally for development with `claude --plugin-dir <mod folder>` (hot-reloads). The `plugin-authoring` skill documents the full mod API (`$` engine interface, events, `ui.render`, `$.state` contracts) and ships `claude-code.d.ts` with every type — grep it rather than guessing.
+
+## Mod architecture (devnonla-git-changes)
+
+`hooks/register.tsx` exports `register: Register = on => {...}`; everything hangs off `on(event, matcher?, hook)` with hooks of the form `($, e, next)`:
+
+- `session.start`: registers the `/repos` command and starts polling — `refresh()` runs immediately and every 5s via `$.clock.every`. `refresh` re-runs `discover()` (session cwd's repo, walks up to 4 parents to find the workspace root, then direct child dirs containing `.git`, skipping `node_modules/dist/build/vendor`) and `git status --porcelain=v1 -b --untracked-files=all` per repo in parallel, parsed by `parseStatus`. `isRefreshing` guards against overlap; `refreshNow` is stashed so `pull` can trigger a refresh.
+- `command.run {command:'repos'}`: opens the pane (`PANE` id = plugin name).
+- `ui.render {component:'SessionMode'}`: injects the 🔀 button beside the prompt footer (yellow when any repo is dirty/errored).
+- `ui.render {component:'Pane', requestId: PANE}`: draws the whole Repos pane — one card per repo, file tree built by `buildRows` (single-child directory chains are collapsed into `a/b/c` labels).
+
+Key conventions in this module:
+
+- **State flows through atoms**: `repos`, `collapsed`, `pulling` are declared with `atom(...)` and typed via `interface PluginState` in `types/index.d.ts`. Render hooks `read($, atom)`; handlers/refresh `update($, atom, fn)`, which redraws readers. When changing an atom's stored shape, bump its `shape` string (`'repos-4'`, etc.) so old persisted values are migrated/discarded, and update `types/index.d.ts` to match.
+- **Clicking a file** goes through `$.tool.call` of `mcp__ccd_view__show_pane`: the session's own repo opens the built-in `diff` pane (`diff_scope: 'uncommitted'`); other repos open the `file` pane.
+- **Pull** is `git pull --ff-only` (120s timeout), all git calls use `--no-optional-locks`, and `pulling` prevents double-pulls per repo name.
+- **Surface differences**: the render code branches on `e.surface === 'terminal'` vs. graphical surfaces. Terminal rows are wrapped in `Button`; desktop rows use an absolutely positioned, hover-revealed invisible `Button` overlay (`rowPress`/`pressable`) so the whole row is clickable. `Svg` may be absent from the element table — always fall back to a text glyph. Tree-row press keys follow `file:<repo>:<path>`, `dir:<repo>:<path>`, `repo:<repo>`, `pull:<repo>`; the tests drive the UI via these keys, so keep them stable.
+- Folding is stored as keys of *collapsed* nodes (`repoKey`/`dirKey`), so new nodes default to open.
+
+## Tests
+
+`hooks/register.test.tsx` uses `claude-code/testing`: engine nouns (`fs.exists`, `fs.list`, `process.run`, `tool.call`, `clock.every`, `session.cwd`, …) are stubbed with `on('<noun.method>', handler)`, then `$.session.start` and `$.ui.mount(...)` render the pane, and `ui.find` / `ui.press` assert on it. Any new engine call made by the mod must be stubbed in the tests or they will fail.

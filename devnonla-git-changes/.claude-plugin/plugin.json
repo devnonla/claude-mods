@@ -1,6 +1,7 @@
 {
   "name": "devnonla-git-changes",
   "version": "0.1.0",
-  "description": "Hiện các repo git trong thư mục đang làm việc, file thay đổi chưa commit, xem diff và pull nhanh",
+  "author": { "name": "devnonla" },
+  "description": "Shows git repos in the working directory, their uncommitted changed files, with quick diff and pull",
   "types": "./types/index.d.ts"
 }

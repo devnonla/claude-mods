@@ -192,11 +192,11 @@ const openChange = async ($: EngineInterface, repo: RepoState, path: string) => 
     ? await $.tool.call({ tool: 'mcp__ccd_view__show_pane', pane: 'diff', path: absolute, diff_scope: 'uncommitted' })
     : await $.tool.call({ tool: 'mcp__ccd_view__show_pane', pane: 'file', path: absolute })
   if (call.deny !== undefined) {
-    $.ui.toast(`Không mở được pane: ${call.deny}`)
+    $.ui.toast(`Could not open pane: ${call.deny}`)
     return
   }
   if (call.isError) {
-    $.ui.toast(`Không mở được pane: ${(call.text ?? '').slice(0, 160)}`)
+    $.ui.toast(`Could not open pane: ${(call.text ?? '').slice(0, 160)}`)
   }
 }
 
@@ -209,12 +209,12 @@ const pull = async ($: EngineInterface, repo: RepoState, after: (() => Promise<v
   try {
     const run = await git($, repo.path, ['pull', '--ff-only'], 120000)
     if (run.exitCode === 0) {
-      $.ui.toast(`${repo.name}: đã pull ${repo.behind} commit mới`)
+      $.ui.toast(`${repo.name}: pulled ${repo.behind} new commit(s)`)
     } else {
-      $.ui.toast(`${repo.name}: pull thất bại. ${(run.stderr || run.stdout).trim().slice(0, 200)}`)
+      $.ui.toast(`${repo.name}: pull failed. ${(run.stderr || run.stdout).trim().slice(0, 200)}`)
     }
   } catch (error) {
-    $.ui.toast(`${repo.name}: pull thất bại. ${String(error).slice(0, 200)}`)
+    $.ui.toast(`${repo.name}: pull failed. ${String(error).slice(0, 200)}`)
   } finally {
     await update($, pulling, old => old.filter(one => one !== repo.name))
     if (after) {
@@ -273,7 +273,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'repos',
-      description: 'Xem repo nào trong workspace có thay đổi chưa commit',
+      description: 'Show which repos in the workspace have uncommitted changes',
     })
 
     const refresh = async () => {
@@ -314,7 +314,7 @@ export const register: Register = on => {
   on('command.run', { command: 'repos' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Repos' })
 
-    return { text: 'Đã mở pane Repos.' }
+    return { text: 'Opened the Repos pane.' }
   })
 
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
@@ -417,7 +417,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap="sm" paddingX="xs" paddingY="xs">
-        {list.length === 0 && <Text dimColor>Đang đọc git status...</Text>}
+        {list.length === 0 && <Text dimColor>Reading git status...</Text>}
 
         {list.map(repo => {
           const total = dirty(repo)
@@ -425,7 +425,7 @@ export const register: Register = on => {
           const rows = !isOpen || repo.error ? [] : buildRows(repo.name, repo.files.slice(0, MAX_FILES), shut)
           const hidden = repo.files.length - MAX_FILES
           const isPulling = busy.includes(repo.name)
-          const note = repo.error ? '' : total === 0 ? 'Không có thay đổi' : isOpen ? '' : `${total} thay đổi · đã thu gọn`
+          const note = repo.error ? '' : total === 0 ? 'No changes' : isOpen ? '' : `${total} changes · collapsed`
 
           return (
             <Box key={`card:${repo.name}`} flexDirection="column" borderStyle="round" borderColor="subtle" overflow="hidden" padding={0}>
@@ -509,7 +509,7 @@ export const register: Register = on => {
               {isOpen && hidden > 0 && (
                 <Box paddingX="md" paddingBottom="sm">
                   <Text dimColor size="footnote">
-                    … và {hidden} file khác
+                    … and {hidden} more files
                   </Text>
                 </Box>
               )}

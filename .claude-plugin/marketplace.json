@@ -1,12 +1,13 @@
 {
   "name": "devnonla-mods",
   "owner": { "name": "devnonla" },
-  "description": "Các mod Claude Code của devnonla",
+  "description": "Claude Code mods by devnonla",
   "plugins": [
     {
       "name": "devnonla-git-changes",
       "source": "./devnonla-git-changes",
-      "description": "Hiện các repo git trong thư mục đang làm việc, file thay đổi chưa commit, xem diff và pull nhanh"
+      "author": { "name": "devnonla" },
+      "description": "Shows git repos in the working directory, their uncommitted changed files, with quick diff and pull"
     }
   ]
 }
