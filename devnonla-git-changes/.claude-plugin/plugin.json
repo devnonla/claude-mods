@@ -1,6 +1,6 @@
 {
   "name": "devnonla-git-changes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "devnonla" },
   "description": "Shows git repos in the working directory, their uncommitted changed files, with quick diff and pull",
   "types": "./types/index.d.ts"
