@@ -1,12 +1,21 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register } from 'claude-code'
 
-import type { ChangedFile, RepoState } from '../types'
+import type { ChangedFile, GraphRef, GraphRow, GraphSeg, GraphState, RepoState } from '../types'
 
 const PANE = 'devnonla-git-changes'
 const INTERVAL_MS = 5000
 const MAX_FILES = 300
+const MAX_COMMITS = 200
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'vendor'])
+
+// Graph geometry (px, desktop SVG) and colors. Lane colors repeat when there are more lines than colors.
+const LANE_W = 12
+const ROW_H = 22
+const PAD_X = 8
+const MAX_LANES = 8
+const PALETTE = ['#3B9EFF', '#F5A623', '#B15DFF', '#2ECC71', '#FF5C5C', '#1ABC9C', '#E91E8C', '#C0CA33']
+const LOG_FORMAT = '%H%x1f%P%x1f%D%x1f%an%x1f%ad%x1f%s'
 
 type RepoRef = { name: string; path: string; isSessionRepo: boolean }
 type TreeNode = { dirs: Map<string, TreeNode>; files: { name: string; path: string; code: string }[] }
@@ -20,6 +29,15 @@ const collapsed = atom({ plugin: 'devnonla-git-changes', key: 'collapsed' } as c
 })
 const pulling = atom({ plugin: 'devnonla-git-changes', key: 'pulling' } as const, [], {
   shape: 'pulling-1',
+})
+const tab = atom({ plugin: 'devnonla-git-changes', key: 'tab' } as const, 'changes', {
+  shape: 'tab-1',
+})
+const graphRepo = atom({ plugin: 'devnonla-git-changes', key: 'graphRepo' } as const, '', {
+  shape: 'graphRepo-1',
+})
+const graph = atom({ plugin: 'devnonla-git-changes', key: 'graph' } as const, { repo: '', lanes: 1, rows: [] } as GraphState, {
+  shape: 'graph-1',
 })
 
 const svg = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${body}</svg>`
@@ -186,6 +204,231 @@ const emptyState = (ref: RepoRef, error: string): RepoState => ({
 
 const git = ($: EngineInterface, cwd: string, args: string[], timeoutMs = 15000) => $.process.run(['git', '--no-optional-locks', ...args], { cwd, timeoutMs })
 
+type RawCommit = { hash: string; parents: string[]; refs: GraphRef[]; author: string; date: string; subject: string }
+type Lane = { hash: string; color: number }
+
+const parseRefs = (raw: string): GraphRef[] =>
+  raw
+    .split(', ')
+    .filter(part => part.length > 0)
+    .map((part): GraphRef => {
+      if (part.startsWith('HEAD -> ')) {
+        return { name: part.slice(8).replace(/^refs\/heads\//, ''), kind: 'head' }
+      }
+      if (part === 'HEAD') {
+        return { name: 'HEAD', kind: 'head' }
+      }
+      if (part.startsWith('tag: ')) {
+        return { name: part.slice(5).replace(/^refs\/tags\//, ''), kind: 'tag' }
+      }
+      if (part.startsWith('refs/remotes/')) {
+        return { name: part.slice(13), kind: 'remote' }
+      }
+
+      return { name: part.replace(/^refs\/heads\//, ''), kind: 'branch' }
+    })
+    .filter(ref => !ref.name.endsWith('/HEAD'))
+
+const parseLog = (out: string): RawCommit[] =>
+  out
+    .split('\n')
+    .filter(line => line.length > 0)
+    .map(line => {
+      const [hash = '', parents = '', refs = '', author = '', date = '', ...subject] = line.split('\u001f')
+
+      return { hash, parents: parents.split(' ').filter(Boolean), refs: parseRefs(refs), author, date, subject: subject.join('\u001f') }
+    })
+
+/**
+ * Assigns every commit a lane, git-gui style: a lane holds the hash it expects next. A commit takes the lane(s)
+ * waiting for it (extra ones merge into it), then its first parent keeps the lane and further parents get/join lanes.
+ */
+const layoutGraph = (repo: string, commits: RawCommit[]): GraphState => {
+  const lanes: (Lane | null)[] = []
+  let nextColor = 0
+  let widest = 1
+
+  const free = () => {
+    const at = lanes.indexOf(null)
+
+    return at >= 0 ? at : lanes.length
+  }
+
+  const rows = commits.map((commit): GraphRow => {
+    const segs: GraphSeg[] = []
+    const before = lanes.slice()
+    const matches = before.flatMap((lane, index) => (lane?.hash === commit.hash ? [index] : []))
+
+    before.forEach((lane, index) => {
+      if (lane && !matches.includes(index)) {
+        segs.push({ kind: 'full', from: index, to: index, color: lane.color })
+      }
+    })
+
+    let node = free()
+    let color = nextColor
+    if (matches.length > 0) {
+      node = matches[0] ?? node
+      color = before[node]?.color ?? color
+      for (const index of matches) {
+        segs.push({ kind: 'top', from: index, to: node, color: before[index]?.color ?? color })
+        if (index !== node) {
+          lanes[index] = null
+        }
+      }
+    } else {
+      nextColor += 1
+    }
+
+    const [first, ...others] = commit.parents
+    if (first) {
+      lanes[node] = { hash: first, color }
+      segs.push({ kind: 'bottom', from: node, to: node, color })
+    } else {
+      lanes[node] = null
+    }
+    for (const parent of others) {
+      let at = lanes.findIndex(lane => lane?.hash === parent)
+      let parentColor = lanes[at]?.color ?? 0
+      if (at < 0) {
+        at = free()
+        parentColor = nextColor
+        nextColor += 1
+        lanes[at] = { hash: parent, color: parentColor }
+      }
+      segs.push({ kind: 'bottom', from: node, to: at, color: parentColor })
+    }
+
+    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+      lanes.pop()
+    }
+    widest = Math.max(widest, before.length, lanes.length, node + 1)
+
+    return { hash: commit.hash, short: commit.hash.slice(0, 7), subject: commit.subject, author: commit.author, date: commit.date, refs: commit.refs, node, color, segs }
+  })
+
+  return { repo, lanes: widest, rows }
+}
+
+const pickGraphRepo = (list: readonly RepoState[], chosen: string) => (list.length === 1 ? (list[0]?.name ?? '') : list.some(repo => repo.name === chosen) ? chosen : '')
+
+let isGraphLoading = false
+let isGraphStale = false
+
+const loadGraphOnce = async ($: EngineInterface) => {
+  const list = await read($, repos)
+  const name = pickGraphRepo(list, await read($, graphRepo))
+  const repo = list.find(one => one.name === name)
+  if (!repo) {
+    return
+  }
+
+  let next: GraphState
+  try {
+    const run = await git($, repo.path, ['log', '--all', '--date-order', '-n', String(MAX_COMMITS), '--decorate=full', '--date=format:%d %b %Y %H:%M', `--format=${LOG_FORMAT}`], 30000)
+    next = run.exitCode === 0 ? layoutGraph(name, parseLog(run.stdout)) : { repo: name, lanes: 1, rows: [], error: run.stderr.trim().slice(0, 160) || `exit ${run.exitCode}` }
+  } catch (error) {
+    next = { repo: name, lanes: 1, rows: [], error: String(error).slice(0, 160) }
+  }
+
+  if (JSON.stringify(await read($, graph)) !== JSON.stringify(next)) {
+    await update($, graph, () => next)
+  }
+}
+
+/** Loads the graph of the selected repo; calls made while a load runs collapse into one more run. */
+const loadGraph = async ($: EngineInterface) => {
+  if (isGraphLoading) {
+    isGraphStale = true
+    return
+  }
+  isGraphLoading = true
+  try {
+    do {
+      isGraphStale = false
+      await loadGraphOnce($)
+    } while (isGraphStale)
+  } finally {
+    isGraphLoading = false
+  }
+}
+
+const laneX = (lane: number) => PAD_X + Math.min(lane, MAX_LANES - 1) * LANE_W
+const graphWidth = (lanes: number) => PAD_X * 2 + (Math.min(Math.max(lanes, 1), MAX_LANES) - 1) * LANE_W
+
+const graphSvg = (row: GraphRow, lanes: number) => {
+  const width = graphWidth(lanes)
+  const mid = ROW_H / 2
+  const paths = row.segs
+    .map(seg => {
+      const x1 = laneX(seg.from)
+      const x2 = laneX(seg.to)
+      const stroke = PALETTE[seg.color % PALETTE.length]
+      let d = `M${x1} 0V${ROW_H}`
+      if (seg.kind === 'top') {
+        d = x1 === x2 ? `M${x1} 0V${mid}` : `M${x1} 0Q${x1} ${mid} ${x2} ${mid}`
+      } else if (seg.kind === 'bottom') {
+        d = x1 === x2 ? `M${x1} ${mid}V${ROW_H}` : `M${x1} ${mid}Q${x2} ${mid} ${x2} ${ROW_H}`
+      }
+
+      return `<path d="${d}" stroke="${stroke}"/>`
+    })
+    .join('')
+  const dot = `<circle cx="${laneX(row.node)}" cy="${mid}" r="4" fill="${PALETTE[row.color % PALETTE.length]}"/>`
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_H}" viewBox="0 0 ${width} ${ROW_H}"><g fill="none" stroke-width="1.8" stroke-linecap="round">${paths}</g>${dot}</svg>`
+}
+
+const graphHeaderSvg = (lanes: number) => {
+  const width = Math.max(graphWidth(lanes), 44)
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_H}" viewBox="0 0 ${width} ${ROW_H}"><text x="${PAD_X - 4}" y="15" font-size="11" font-weight="600" fill="#8B949E">Graph</text></svg>`
+}
+
+/** The same graph in box-drawing characters, for the terminal (two cells a lane). Returns colored runs. */
+const graphText = (row: GraphRow, lanes: number): { text: string; color: number }[] => {
+  const count = Math.max(Math.min(lanes, MAX_LANES), 3)
+  const chars: string[] = Array.from({ length: count * 2 }, () => ' ')
+  const colors: number[] = Array.from({ length: count * 2 }, () => -1)
+  const put = (position: number, char: string, color: number) => {
+    if (position >= 0 && position < chars.length) {
+      chars[position] = char
+      colors[position] = color
+    }
+  }
+  const at = (lane: number) => Math.min(lane, count - 1) * 2
+
+  for (const seg of row.segs) {
+    const from = at(seg.from)
+    const to = at(seg.to)
+    if (seg.kind === 'full' || from === to) {
+      put(from, '│', seg.color)
+      continue
+    }
+    const corner = seg.kind === 'top' ? (to < from ? '╯' : '╰') : to < from ? '╭' : '╮'
+    for (let position = Math.min(from, to) + 1; position < Math.max(from, to); position += 1) {
+      put(position, '─', seg.color)
+    }
+    put(from, corner, seg.color)
+  }
+  put(at(row.node), '●', row.color)
+
+  const runs: { text: string; color: number }[] = []
+  chars.forEach((char, index) => {
+    const color = colors[index] ?? -1
+    const last = runs[runs.length - 1]
+    if (last && last.color === color) {
+      last.text += char
+    } else {
+      runs.push({ text: char, color })
+    }
+  })
+
+  return runs
+}
+
+const refColor = (kind: GraphRef['kind']) => (kind === 'head' ? '#2EA043' : kind === 'branch' ? '#D29922' : kind === 'tag' ? '#8957E5' : '#4B5563')
+
 const openChange = async ($: EngineInterface, repo: RepoState, path: string) => {
   const absolute = `${repo.path}/${path}`
   const call = repo.isSessionRepo
@@ -298,6 +541,9 @@ export const register: Register = on => {
           }),
         )
         await update($, repos, () => states)
+        if ((await read($, tab)) === 'graph') {
+          await loadGraph($)
+        }
       } finally {
         isRefreshing = false
       }
@@ -347,13 +593,16 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
-    const { Box, Button, Text } = table
+    const { Box, Button, Select, Text } = table
     const Svg = 'Svg' in table ? table.Svg : undefined
     const isTerminal = e.surface === 'terminal'
     const headerBg = isTerminal ? undefined : 'rgba(127, 127, 127, 0.09)'
     const list = await read($, repos)
     const shut = await read($, collapsed)
     const busy = await read($, pulling)
+    const currentTab = await read($, tab)
+    const chosen = pickGraphRepo(list, await read($, graphRepo))
+    const graphState = await read($, graph)
 
     const toggle = (key: string) => update($, collapsed, old => (old.includes(key) ? old.filter(one => one !== key) : [...old, key]))
     const icon = (source: string, alt: string, fallback: string) => (Svg ? <Svg source={source} alt={alt} width={14} height={14} /> : <Text dimColor>{fallback}</Text>)
@@ -415,8 +664,8 @@ export const register: Register = on => {
       )
     }
 
-    return (
-      <Box flexDirection="column" gap="sm" paddingX="xs" paddingY="xs">
+    const changesView = (
+      <Box flexDirection="column" gap="sm">
         {list.length === 0 && <Text dimColor>Reading git status...</Text>}
 
         {list.map(repo => {
@@ -516,6 +765,161 @@ export const register: Register = on => {
             </Box>
           )
         })}
+      </Box>
+    )
+
+    const showTab = async (next: string) => {
+      await update($, tab, () => next)
+      if (next === 'graph') {
+        await loadGraph($)
+      }
+    }
+
+    const tabButton = (id: string, label: string) => (
+      <Button key={`tab:${id}`} plain onPress={() => showTab(id)}>
+        <Text weight={currentTab === id ? 'semibold' : 'regular'} underline={currentTab === id} dimColor={currentTab !== id}>
+          {label}
+        </Text>
+      </Button>
+    )
+
+    const graphView = () => {
+      const showAuthor = e.props.bodyColumns >= 70
+      const showDate = e.props.bodyColumns >= 90
+      const lanes = graphState.repo === chosen ? graphState.lanes : 1
+      const drawSvg = Svg !== undefined && !isTerminal
+      const cell = (row: GraphRow) =>
+        Svg && drawSvg ? (
+          <Svg source={graphSvg(row, lanes)} alt="graph" width={graphWidth(lanes)} height={ROW_H} />
+        ) : (
+          <Box flexShrink={0}>
+            {graphText(row, lanes).map((run, index) => (
+              <Text key={`run:${index}`} color={run.color < 0 ? undefined : PALETTE[run.color % PALETTE.length]}>
+                {run.text}
+              </Text>
+            ))}
+          </Box>
+        )
+      const columns = (graphCell: unknown, description: unknown, date: string, author: string, hash: string, look: { dim: boolean }) => (
+        <Box gap={1} alignItems="center">
+          {graphCell}
+          <Box flexGrow={1} flexShrink={1} minWidth={0} gap={1} alignItems="center">
+            {description}
+          </Box>
+          {showDate && (
+            <Box width={17} flexShrink={0}>
+              <Text dimColor size="footnote" wrap="truncate-end">
+                {date}
+              </Text>
+            </Box>
+          )}
+          {showAuthor && (
+            <Box width={14} flexShrink={0}>
+              <Text dimColor={look.dim} size="footnote" wrap="truncate-end">
+                {author}
+              </Text>
+            </Box>
+          )}
+          <Box width={8} flexShrink={0}>
+            <Text dimColor mono size="footnote">
+              {hash}
+            </Text>
+          </Box>
+        </Box>
+      )
+
+      if (list.length === 0) {
+        return <Text dimColor>Reading git status...</Text>
+      }
+
+      const picker =
+        list.length > 1 ? (
+          <Select
+            key="graph-repo"
+            label="Repo: "
+            options={list.map(repo => ({ value: repo.name, label: repo.name }))}
+            value={chosen === '' ? undefined : chosen}
+            onSelect={async value => {
+              await update($, graphRepo, () => value)
+              await loadGraph($)
+            }}
+          />
+        ) : null
+
+      if (chosen === '') {
+        return (
+          <Box flexDirection="column" gap="sm">
+            {picker}
+            <Text dimColor>Select a repo to see its graph.</Text>
+          </Box>
+        )
+      }
+      if (graphState.repo !== chosen) {
+        return (
+          <Box flexDirection="column" gap="sm">
+            {picker}
+            <Text dimColor>Loading graph...</Text>
+          </Box>
+        )
+      }
+
+      const header = columns(
+        Svg && drawSvg ? <Svg source={graphHeaderSvg(lanes)} alt="Graph" width={Math.max(graphWidth(lanes), 44)} height={ROW_H} /> : <Text dimColor>{'Graph'.padEnd(Math.max(Math.min(lanes, MAX_LANES), 3) * 2)}</Text>,
+        <Text dimColor size="footnote" weight="semibold">
+          Description
+        </Text>,
+        'Date',
+        'Author',
+        'Commit',
+        { dim: true },
+      )
+
+      return (
+        <Box flexDirection="column" gap="sm">
+          {picker}
+          {graphState.error && (
+            <Text color="error" size="footnote" wrap="wrap">
+              {graphState.error}
+            </Text>
+          )}
+          {!graphState.error && graphState.rows.length === 0 && <Text dimColor>No commits yet.</Text>}
+          {graphState.rows.length > 0 && (
+            <Box flexDirection="column" rowGap={0}>
+              {header}
+              {graphState.rows.map(row => (
+                <Box key={`commit:${row.hash}`} flexDirection="column">
+                  {columns(
+                    cell(row),
+                    <Box gap={1} alignItems="center" flexShrink={1} minWidth={0}>
+                      {row.refs.map(ref => (
+                        <Box key={`ref:${row.hash}:${ref.kind}:${ref.name}`} flexShrink={0}>
+                          <Text backgroundColor={refColor(ref.kind)} color="#FFFFFF" size="caption" weight="semibold" wrap="truncate-end">
+                            {` ${ref.name} `}
+                          </Text>
+                        </Box>
+                      ))}
+                      <Text wrap="truncate-end">{row.subject}</Text>
+                    </Box>,
+                    row.date,
+                    row.author,
+                    row.short,
+                    { dim: false },
+                  )}
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column" gap="sm" paddingX="xs" paddingY="xs">
+        <Box gap={2} alignItems="center">
+          {tabButton('changes', 'Changes')}
+          {tabButton('graph', 'Graph')}
+        </Box>
+        {currentTab === 'graph' ? graphView() : changesView}
       </Box>
     )
   })
