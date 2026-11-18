@@ -21,7 +21,8 @@ tsc -p devnonla-git-changes                   # type-check; works only after the
 
 Checks run automatically in two places, so keep both passing:
 - `.claude/settings.json` registers a `PostToolUse` hook (`Edit|Write`) running `.claude/hooks/check-mod.sh`. When a file inside a mod folder changes, it runs `claude plugin validate` and `claude plugin test` for that mod and exits 2 (failure fed back to Claude) if either fails.
-- `.github/workflows/ci.yml` runs `claude plugin validate --strict` on the marketplace and on every mod folder, then `claude plugin test` per mod. `--strict` turns warnings into errors, so each `plugin.json` / marketplace entry needs an `author`, and each mod README needs the `/plugin install <mod> --marketplace devnonla/claude-mods` line.
+- `scripts/check-all.sh` is the single full check: `claude plugin validate --strict` on the marketplace and on every mod folder, then `claude plugin test` per mod. It is used by both CI (`.github/workflows/ci.yml`) and the git `pre-push` hook in `.githooks/`. The hook only works after a one-time `git config core.hooksPath .githooks` per clone; bypass once with `git push --no-verify`.
+- CI runs that script on every push to `main` and on PRs. `--strict` turns warnings into errors, so each `plugin.json` / marketplace entry needs an `author`, and each mod README needs the `/plugin install <mod> --marketplace devnonla/claude-mods` line.
 
 Install locally for development with `claude --plugin-dir <mod folder>` (hot-reloads). The `plugin-authoring` skill documents the full mod API (`$` engine interface, events, `ui.render`, `$.state` contracts) and ships `claude-code.d.ts` with every type — grep it rather than guessing.
 
