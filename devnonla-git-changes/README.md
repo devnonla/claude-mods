@@ -19,3 +19,7 @@ A Claude Code mod that shows the git repos in the working directory (the root an
 ```
 
 See the [repo README](../README.md) for the CLI and desktop install steps.
+
+## Credits
+
+File-type icons are from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT, see `NOTICE-material-icon-theme.txt`).

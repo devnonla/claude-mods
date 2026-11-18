@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register } from 'claude-code'
 
+import { EXT_ICON, ICONS, NAME_ICON } from './icons'
 import type { ChangedFile, GraphRef, GraphRow, GraphSeg, GraphState, RepoState } from '../types'
 
 const PANE = 'devnonla-git-changes'
@@ -55,35 +56,12 @@ const ICON_FOLDER = svg(
   '<path fill="#C09553" d="M1.5 2.5h4.3l1.5 1.5h7.2c.6 0 1 .4 1 1v7.5c0 .6-.4 1-1 1h-13c-.6 0-1-.4-1-1v-9c0-.6.4-1 1-1z"/>',
 )
 
-const EXT_COLORS: Record<string, string> = {
-  ts: '#3178C6',
-  tsx: '#3178C6',
-  js: '#E8C547',
-  jsx: '#E8C547',
-  mjs: '#E8C547',
-  cjs: '#E8C547',
-  json: '#CBCB41',
-  md: '#519ABA',
-  css: '#42A5F5',
-  scss: '#F55385',
-  html: '#E44D26',
-  sh: '#89E051',
-  yml: '#CB4B16',
-  yaml: '#CB4B16',
-  sql: '#E38C00',
-  svg: '#FFB13B',
-  png: '#A074C4',
-  jpg: '#A074C4',
-  lock: '#8B949E',
-}
-
 const fileIcon = (name: string) => {
-  const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : ''
-  const color = EXT_COLORS[ext] ?? '#8B949E'
+  const lower = name.toLowerCase()
+  const ext = lower.includes('.') ? (lower.split('.').pop() ?? '') : ''
+  const key = NAME_ICON[lower] ?? (lower.startsWith('.env') ? 'key' : EXT_ICON[ext]) ?? 'document'
 
-  return svg(
-    `<path fill="${color}" d="M4 1h5.2L13 4.8V14c0 .6-.4 1-1 1H4c-.6 0-1-.4-1-1V2c0-.6.4-1 1-1z"/><path fill="#FFFFFF" fill-opacity=".45" d="M9.2 1v3.8H13z"/>`,
-  )
+  return ICONS[key] ?? (ICONS.document as string)
 }
 
 const unquote = (path: string) => (path.startsWith('"') && path.endsWith('"') ? path.slice(1, -1) : path)
@@ -609,7 +587,7 @@ export const register: Register = on => {
     const treeGap = isTerminal ? 1 : 0
     const treeIcon = (source: string, alt: string, fallback: string) =>
       Svg ? (
-        <Svg source={source.replace('viewBox="0 0 16 16"', 'viewBox="0 0 19.5 16" preserveAspectRatio="xMinYMid meet"')} alt={alt} width={17} height={14} />
+        <Svg source={source.replace(/viewBox="(\S+) (\S+) (\S+) (\S+)"/, (_, x, y, _w, h) => `viewBox="${x} ${y} ${Number(h) * 1.21875} ${h}" preserveAspectRatio="xMinYMid meet"`)} alt={alt} width={17} height={14} />
       ) : (
         <Text dimColor>{fallback}</Text>
       )
@@ -833,7 +811,6 @@ export const register: Register = on => {
         list.length > 1 ? (
           <Select
             key="graph-repo"
-            label="Repo: "
             options={list.map(repo => ({ value: repo.name, label: repo.name }))}
             value={chosen === '' ? undefined : chosen}
             onSelect={async value => {
