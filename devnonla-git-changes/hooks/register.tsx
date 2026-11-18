@@ -11,7 +11,7 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'vendor'])
 
 // Graph geometry (px, desktop SVG) and colors. Lane colors repeat when there are more lines than colors.
 const LANE_W = 12
-const ROW_H = 22
+const ROW_H = 30
 const PAD_X = 8
 const MAX_LANES = 8
 const PALETTE = ['#3B9EFF', '#F5A623', '#B15DFF', '#2ECC71', '#FF5C5C', '#1ABC9C', '#E91E8C', '#C0CA33']
@@ -374,7 +374,7 @@ const graphSvg = (row: GraphRow, lanes: number) => {
       return `<path d="${d}" stroke="${stroke}"/>`
     })
     .join('')
-  const dot = `<circle cx="${laneX(row.node)}" cy="${mid}" r="4" fill="${PALETTE[row.color % PALETTE.length]}"/>`
+  const dot = `<circle cx="${laneX(row.node)}" cy="${mid}" r="4.5" fill="${PALETTE[row.color % PALETTE.length]}"/>`
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_H}" viewBox="0 0 ${width} ${ROW_H}"><g fill="none" stroke-width="1.8" stroke-linecap="round">${paths}</g>${dot}</svg>`
 }
@@ -382,7 +382,7 @@ const graphSvg = (row: GraphRow, lanes: number) => {
 const graphHeaderSvg = (lanes: number) => {
   const width = Math.max(graphWidth(lanes), 44)
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_H}" viewBox="0 0 ${width} ${ROW_H}"><text x="${PAD_X - 4}" y="15" font-size="11" font-weight="600" fill="#8B949E">Graph</text></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW_H}" viewBox="0 0 ${width} ${ROW_H}"><text x="${PAD_X - 4}" y="${ROW_H / 2 + 4}" font-size="11" font-weight="600" fill="#8B949E">Graph</text></svg>`
 }
 
 /** The same graph in box-drawing characters, for the terminal (two cells a lane). Returns colored runs. */
@@ -775,12 +775,9 @@ export const register: Register = on => {
       }
     }
 
+    // Tabs are native Buttons, so the whole button is the click target: primary (filled) for the active tab, secondary for the other.
     const tabButton = (id: string, label: string) => (
-      <Button key={`tab:${id}`} plain onPress={() => showTab(id)}>
-        <Text weight={currentTab === id ? 'semibold' : 'regular'} underline={currentTab === id} dimColor={currentTab !== id}>
-          {label}
-        </Text>
-      </Button>
+      <Button key={`tab:${id}`} label={label} variant={currentTab === id ? 'primary' : 'secondary'} onPress={() => showTab(id)} />
     )
 
     const graphView = () => {
@@ -801,21 +798,21 @@ export const register: Register = on => {
           </Box>
         )
       const columns = (graphCell: unknown, description: unknown, date: string, author: string, hash: string, look: { dim: boolean }) => (
-        <Box gap={1} alignItems="center">
+        <Box gap={2} alignItems="center" paddingX="xs">
           {graphCell}
           <Box flexGrow={1} flexShrink={1} minWidth={0} gap={1} alignItems="center">
             {description}
           </Box>
           {showDate && (
             <Box width={17} flexShrink={0}>
-              <Text dimColor size="footnote" wrap="truncate-end">
+              <Text dimColor size="footnote" wrap="truncate">
                 {date}
               </Text>
             </Box>
           )}
           {showAuthor && (
             <Box width={14} flexShrink={0}>
-              <Text dimColor={look.dim} size="footnote" wrap="truncate-end">
+              <Text dimColor={look.dim} size="footnote" wrap="truncate">
                 {author}
               </Text>
             </Box>
@@ -893,12 +890,12 @@ export const register: Register = on => {
                     <Box gap={1} alignItems="center" flexShrink={1} minWidth={0}>
                       {row.refs.map(ref => (
                         <Box key={`ref:${row.hash}:${ref.kind}:${ref.name}`} flexShrink={0}>
-                          <Text backgroundColor={refColor(ref.kind)} color="#FFFFFF" size="caption" weight="semibold" wrap="truncate-end">
+                          <Text backgroundColor={refColor(ref.kind)} color="#FFFFFF" size="caption" weight="semibold" wrap="truncate">
                             {` ${ref.name} `}
                           </Text>
                         </Box>
                       ))}
-                      <Text wrap="truncate-end">{row.subject}</Text>
+                      <Text wrap="truncate">{row.subject}</Text>
                     </Box>,
                     row.date,
                     row.author,
@@ -915,7 +912,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap="sm" paddingX="xs" paddingY="xs">
-        <Box gap={2} alignItems="center">
+        <Box gap={1} alignItems="center">
           {tabButton('changes', 'Changes')}
           {tabButton('graph', 'Graph')}
         </Box>

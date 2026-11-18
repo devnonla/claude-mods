@@ -46,3 +46,18 @@ Key conventions in this module:
 ## Tests
 
 `hooks/register.test.tsx` uses `claude-code/testing`: engine nouns (`fs.exists`, `fs.list`, `process.run`, `tool.call`, `clock.every`, `session.cwd`, …) are stubbed with `on('<noun.method>', handler)`, then `$.session.start` and `$.ui.mount(...)` render the pane, and `ui.find` / `ui.press` assert on it. Any new engine call made by the mod must be stubbed in the tests or they will fail.
+
+## Mod UI lessons (learned the hard way — read before touching `ui.render`)
+
+How to see changes: the user's installed copy of the mod is a separate, older copy (check `claude plugin list` for its "Read from" path; a same-version cache is never refreshed). To see edits live, copy the mod into `~/.claude/dev-mods/<session-id>/<mod>/` (hot-reloads, user must accept "Turn on mods?" once) or run `claude --plugin-dir <mod folder>`. Bump `version` in `plugin.json` for any installed-copy update. Tests only check the returned tree, never how it is painted, so say plainly when a visual change is unseen and ask the user to look; never commit UI changes as "tested" before they have.
+
+Rules for what draws well on desktop:
+- **Button children may only be strings or `Text`** (any other element is refused). Padding inside a Button via spaces/`\n` is clipped by the native button and shows `…` (and newlines collapse), so do not pad inside a Button.
+- **To get a big, correctly sized click target, use the native Button itself**: `<Button label="…" variant="primary|secondary" />` (`primary` = filled active, `secondary` = grey inactive). A `plain` Button wrapped in a padded/filled Box leaves the Button smaller than the visible area; a transparent Button overlaid on a Box shrinks into a pill and truncates its text.
+- The hover-revealed full-row Button overlay (`rowPress` in the file tree: absolute Box, `display="none"`, `hover={{ display: 'flex' }}`) is the one working way to make a whole custom row clickable; put `wrap="truncate"` (no ellipsis) on its nbsp Text. It only reacts after hovering.
+- **Never show `…`**: use `wrap="truncate"` (hard cut) rather than `truncate-end`/`truncate-middle` where the user dislikes ellipses (the graph rows do), and do not add UI text that ends in `…`/`...` unless asked.
+- Per-row SVG (graph) must have a fixed height equal to the row so lanes join; row spacing is changed through `ROW_H`, never through gaps between rows.
+- No per-side borders and no rounded top corners exist on `Box`; do not promise tab designs that need them. Reference "underline tab" looks can only be approximated (fills, an absolutely positioned wide `Svg` clipped by `overflow="hidden"`).
+- The terminal table has no `Svg` (the test harness still lists it but draws an empty Box): guard with `Svg && !isTerminal` and provide a text fallback.
+- Colors are free strings (`#RRGGBB`, `rgba(...)`), but a native Button may override text color; do not rely on custom text color inside Buttons.
+- Keep UI text English and short; the user prefers no counts/icons in tab labels.
