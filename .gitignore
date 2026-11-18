@@ -4,3 +4,9 @@ node_modules/
 .claude/settings.local.json
 # Written by the engine when a mod loads
 .claude-plugin/types/
+
+# Dev-only files: kept on this machine, not published (the repo ships only the mods, README and marketplace.json)
+.claude/
+CLAUDE.md
+scripts/
+.github/
