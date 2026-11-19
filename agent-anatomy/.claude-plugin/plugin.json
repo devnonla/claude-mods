@@ -1,0 +1,9 @@
+{
+  "name": "agent-anatomy",
+  "version": "0.1.0",
+  "author": {
+    "name": "devnonla"
+  },
+  "description": "A side pane that dissects the main agent: the agents it can run, its tools (switch them on or off), its skills and what it remembers about the project",
+  "types": "./types/index.d.ts"
+}

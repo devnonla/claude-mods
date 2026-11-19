@@ -1,13 +1,25 @@
 {
   "name": "devnonla-mods",
-  "owner": { "name": "devnonla" },
+  "owner": {
+    "name": "devnonla"
+  },
   "description": "Claude Code mods by devnonla",
   "plugins": [
     {
       "name": "devnonla-git-changes",
       "source": "./devnonla-git-changes",
-      "author": { "name": "devnonla" },
+      "author": {
+        "name": "devnonla"
+      },
       "description": "Shows git repos in the working directory, their uncommitted changed files, with quick diff and pull"
+    },
+    {
+      "name": "agent-anatomy",
+      "source": "./agent-anatomy",
+      "author": {
+        "name": "devnonla"
+      },
+      "description": "A side pane that dissects the main agent: the agents it can run, its tools (switch them on or off), its skills and what it remembers about the project"
     }
   ]
 }
