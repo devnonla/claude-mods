@@ -93,7 +93,9 @@ const LOG = [
   .map(fields => fields.join(SEP))
   .join('\n')
 
-const stubWorkspace = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], roots: string[], cwd: string, logCalls: string[]) => {
+type Body = Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>
+
+const stubWorkspace = (_$: Parameters<Body>[0], on: Parameters<Body>[1], roots: string[], cwd: string, logCalls: string[]) => {
   on('command.register', () => ({ value: { command: 'repos' } }))
   on('fs.exists', (_, e) => ({ value: roots.some(root => e.path === `${root}/.git`) }))
   on('fs.list', (_, e) => ({
@@ -152,5 +154,37 @@ test('with several repos the Graph tab asks which one, then loads that repo', as
   await ui.select({ key: 'graph-repo', value: 'admin' })
   expect(logCalls.at(-1)).toContain('/work/demo/admin')
   expect((await ui.find({ type: 'Text', text: /^Merge feature$/ }))?.text).toBe('Merge feature')
+  await ui.unmount()
+})
+
+test('the Graph tab loads one page, skips git log while nothing moved, and loads more on request', async ($, on) => {
+  const calls: string[][] = []
+  const page = Array.from({ length: 100 }, (_, index) => [`d${String(index).padStart(7, '0')}`, index === 99 ? '' : `d${String(index + 1).padStart(7, '0')}`, '', 'Ann', '3 Sep 2019 19:00', `Commit ${index}`].join(SEP)).join('\n')
+  on('command.register', () => ({ value: { command: 'repos' } }))
+  on('fs.exists', (_, e) => ({ value: e.path === '/work/demo/.git' }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.run', (_, e) => {
+    calls.push([...e.argv])
+
+    return { value: { exitCode: 0, stdout: e.argv.includes('log') ? page : e.argv.includes('rev-parse') ? 'abc\n' : '## main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('clock.every', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: '/work/demo' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/work/demo', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ plugin: 'devnonla-git-changes', component: 'Pane', requestId: 'devnonla-git-changes', props: paneProps, surface: 'desktop' })
+  await ui.press({ key: 'tab:graph' })
+  const logs = () => calls.filter(argv => argv.includes('log'))
+  expect(logs()).toHaveLength(1)
+  expect(logs()[0]).toContain('100')
+
+  await ui.press({ key: 'tab:changes' })
+  await ui.press({ key: 'tab:graph' })
+  expect(logs()).toHaveLength(1)
+
+  await ui.press({ key: 'graph-more' })
+  expect(logs()).toHaveLength(2)
+  expect(logs()[1]).toContain('200')
   await ui.unmount()
 })

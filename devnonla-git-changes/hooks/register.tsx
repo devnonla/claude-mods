@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, Register } from 'claude-code'
+import type { Color, EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import { EXT_ICON, ICONS, NAME_ICON } from './icons'
 import type { ChangedFile, GraphRef, GraphRow, GraphSeg, GraphState, RepoState } from '../types'
@@ -7,7 +7,11 @@ import type { ChangedFile, GraphRef, GraphRow, GraphSeg, GraphState, RepoState }
 const PANE = 'devnonla-git-changes'
 const INTERVAL_MS = 5000
 const MAX_FILES = 300
-const MAX_COMMITS = 200
+// The Changes tab draws at most this many tree rows in all (every row carries an icon and a click target): a workspace with hundreds of changes would
+// otherwise make a tree of several hundred KB that the desktop app may refuse to draw. Fold a repo to see the rest.
+const ROW_BUDGET = 120
+// The graph loads this many commits at first and this many more each time "Load more" is pressed (every row is a drawn SVG, so the tree grows with it).
+const GRAPH_PAGE = 100
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'vendor'])
 
 // Graph geometry (px, desktop SVG) and colors. Lane colors repeat when there are more lines than colors.
@@ -36,6 +40,9 @@ const tab = atom({ plugin: 'devnonla-git-changes', key: 'tab' } as const, 'chang
 })
 const graphRepo = atom({ plugin: 'devnonla-git-changes', key: 'graphRepo' } as const, '', {
   shape: 'graphRepo-1',
+})
+const graphLimit = atom({ plugin: 'devnonla-git-changes', key: 'graphLimit' } as const, 100, {
+  shape: 'graphLimit-1',
 })
 const graph = atom({ plugin: 'devnonla-git-changes', key: 'graph' } as const, { repo: '', lanes: 1, rows: [] } as GraphState, {
   shape: 'graph-1',
@@ -292,6 +299,8 @@ const pickGraphRepo = (list: readonly RepoState[], chosen: string) => (list.leng
 
 let isGraphLoading = false
 let isGraphStale = false
+// What the shown graph was built from (repo, how many commits, and every ref's tip): while it is unchanged, a refresh is one cheap `rev-parse` and no `log`.
+let loadedKey = ''
 
 const loadGraphOnce = async ($: EngineInterface) => {
   const list = await read($, repos)
@@ -300,13 +309,28 @@ const loadGraphOnce = async ($: EngineInterface) => {
   if (!repo) {
     return
   }
+  const limit = await read($, graphLimit)
+
+  let tips = ''
+  try {
+    const refs = await git($, repo.path, ['rev-parse', '--all', 'HEAD'], 10000)
+    tips = refs.exitCode === 0 ? refs.stdout.trim() : ''
+  } catch {
+    tips = ''
+  }
+  const key = `${name}|${limit}|${tips}`
+  if (tips !== '' && key === loadedKey && (await read($, graph)).repo === name) {
+    return
+  }
 
   let next: GraphState
   try {
-    const run = await git($, repo.path, ['log', '--all', '--date-order', '-n', String(MAX_COMMITS), '--decorate=full', '--date=format:%d %b %Y %H:%M', `--format=${LOG_FORMAT}`], 30000)
+    const run = await git($, repo.path, ['log', '--all', '--date-order', '-n', String(limit), '--decorate=full', '--date=format:%d %b %Y %H:%M', `--format=${LOG_FORMAT}`], 30000)
     next = run.exitCode === 0 ? layoutGraph(name, parseLog(run.stdout)) : { repo: name, lanes: 1, rows: [], error: run.stderr.trim().slice(0, 160) || `exit ${run.exitCode}` }
+    loadedKey = run.exitCode === 0 ? key : ''
   } catch (error) {
     next = { repo: name, lanes: 1, rows: [], error: String(error).slice(0, 160) }
+    loadedKey = ''
   }
 
   if (JSON.stringify(await read($, graph)) !== JSON.stringify(next)) {
@@ -546,12 +570,14 @@ export const register: Register = on => {
     if (list.length === 0) {
       return next(e)
     }
+    // Keep what the engine and other mods draw here (mode text, other buttons) and add ours beside it.
+    const base = await next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const changed = list.filter(repo => dirty(repo) > 0 || repo.error).length
 
     return (
       <Box>
-        {e.props.modes.length > 0 && <Text dimColor>{e.props.modes.join(' & ')} </Text>}
+        {base}
         <Button
           key="toggle-repos"
           onPress={async () => {
@@ -581,6 +607,7 @@ export const register: Register = on => {
     const currentTab = await read($, tab)
     const chosen = pickGraphRepo(list, await read($, graphRepo))
     const graphState = await read($, graph)
+    const pageLimit = await read($, graphLimit)
 
     const toggle = (key: string) => update($, collapsed, old => (old.includes(key) ? old.filter(one => one !== key) : [...old, key]))
     const icon = (source: string, alt: string, fallback: string) => (Svg ? <Svg source={source} alt={alt} width={14} height={14} /> : <Text dimColor>{fallback}</Text>)
@@ -598,7 +625,7 @@ export const register: Register = on => {
       isTerminal ? null : (
         <Box position="absolute" top={0} left={-1} right={-8} bottom={0} alignItems="center" display="none" hover={{ display: 'flex' }}>
           <Button key={key} plain onPress={onPress}>
-            <Text>{'\u00A0'.repeat(Math.max(24, e.props.bodyColumns * 4))}</Text>
+            <Text>{'\u00A0'.repeat(40)}</Text>
           </Button>
         </Box>
       )
@@ -642,6 +669,7 @@ export const register: Register = on => {
       )
     }
 
+    let rowBudget = ROW_BUDGET
     const changesView = (
       <Box flexDirection="column" gap="sm">
         {list.length === 0 && <Text dimColor>Reading git status...</Text>}
@@ -649,8 +677,10 @@ export const register: Register = on => {
         {list.map(repo => {
           const total = dirty(repo)
           const isOpen = total > 0 && !shut.includes(repoKey(repo.name))
-          const rows = !isOpen || repo.error ? [] : buildRows(repo.name, repo.files.slice(0, MAX_FILES), shut)
-          const hidden = repo.files.length - MAX_FILES
+          const allRows = !isOpen || repo.error ? [] : buildRows(repo.name, repo.files.slice(0, MAX_FILES), shut)
+          const rows = allRows.slice(0, Math.max(rowBudget, 0))
+          rowBudget -= rows.length
+          const hidden = allRows.length - rows.length + Math.max(repo.files.length - MAX_FILES, 0)
           const isPulling = busy.includes(repo.name)
           const note = repo.error ? '' : total === 0 ? 'No changes' : isOpen ? '' : `${total} changes · collapsed`
 
@@ -736,7 +766,7 @@ export const register: Register = on => {
               {isOpen && hidden > 0 && (
                 <Box paddingX="md" paddingBottom="sm">
                   <Text dimColor size="footnote">
-                    … and {hidden} more files
+                    … and {hidden} more (fold another repo to see them)
                   </Text>
                 </Box>
               )}
@@ -775,7 +805,7 @@ export const register: Register = on => {
             ))}
           </Box>
         )
-      const columns = (graphCell: unknown, description: unknown, date: string, author: string, hash: string, look: { dim: boolean }) => (
+      const columns = (graphCell: RenderChildren, description: RenderChildren, date: string, author: string, hash: string, look: { dim: boolean }) => (
         <Box gap={2} alignItems="center" paddingX="xs">
           {graphCell}
           <Box flexGrow={1} flexShrink={1} minWidth={0} gap={1} alignItems="center">
@@ -815,6 +845,7 @@ export const register: Register = on => {
             value={chosen === '' ? undefined : chosen}
             onSelect={async value => {
               await update($, graphRepo, () => value)
+              await update($, graphLimit, () => GRAPH_PAGE)
               await loadGraph($)
             }}
           />
@@ -881,6 +912,19 @@ export const register: Register = on => {
                   )}
                 </Box>
               ))}
+            </Box>
+          )}
+          {graphState.rows.length >= pageLimit && (
+            <Box>
+              <Button
+                key="graph-more"
+                label="Load more"
+                variant="secondary"
+                onPress={async () => {
+                  await update($, graphLimit, old => old + GRAPH_PAGE)
+                  await loadGraph($)
+                }}
+              />
             </Box>
           )}
         </Box>

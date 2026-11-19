@@ -62,6 +62,7 @@ declare module 'claude-code' {
       pulling: Shaped<string[]>
       tab: Shaped<string>
       graphRepo: Shaped<string>
+      graphLimit: Shaped<number>
       graph: Shaped<GraphState>
     }
   }
