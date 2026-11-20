@@ -5,6 +5,8 @@ import { EXT_ICON, ICONS, NAME_ICON } from './icons'
 import type { ChangedFile, GraphRef, GraphRow, GraphSeg, GraphState, RepoState } from '../types'
 
 const PANE = 'devnonla-git-changes'
+// Keep in sync with .claude-plugin/plugin.json (shown in the pane so the running copy is obvious).
+const VERSION = '0.3.1'
 const INTERVAL_MS = 5000
 const MAX_FILES = 300
 // The Changes tab draws at most this many tree rows in all (every row carries an icon and a click target): a workspace with hundreds of changes would
@@ -71,12 +73,13 @@ const fileIcon = (name: string) => {
   return ICONS[key] ?? (ICONS.document as string)
 }
 
-const unquote = (path: string) => (path.startsWith('"') && path.endsWith('"') ? path.slice(1, -1) : path)
 const baseName = (path: string) => path.split('/').pop() || path
 
 const parseStatus = (ref: RepoRef, out: string): RepoState => {
-  const lines = out.split('\n').filter(line => line.length > 0)
-  const head = lines.find(line => line.startsWith('## ')) ?? ''
+  // Parses `git status --porcelain=v1 -b -z`: NUL-separated records, paths never quoted,
+  // and a rename/copy record ("R  new") is followed by an extra record holding the old path.
+  const records = out.split(out.includes('\0') ? '\0' : '\n')
+  const head = records.find(record => record.startsWith('## ')) ?? ''
   const branchPart = head.slice(3).split('...')[0] ?? ''
   const branch = branchPart.replace(/^No commits yet on /, '').replace(/ \[.*$/, '') || '?'
   const ahead = Number(/ahead (\d+)/.exec(head)?.[1] ?? 0)
@@ -85,14 +88,17 @@ const parseStatus = (ref: RepoRef, out: string): RepoState => {
   let unstaged = 0
   let untracked = 0
   const files: ChangedFile[] = []
-  for (const line of lines) {
-    if (line.startsWith('## ')) {
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] as string
+    if (record.length < 4 || record.startsWith('## ')) {
       continue
     }
-    const x = line[0] ?? ' '
-    const y = line[1] ?? ' '
-    const rawPath = line.slice(3)
-    const path = unquote(rawPath.includes(' -> ') ? (rawPath.split(' -> ')[1] ?? rawPath) : rawPath)
+    const x = record[0] ?? ' '
+    const y = record[1] ?? ' '
+    const path = record.slice(3)
+    if (x === 'R' || x === 'C') {
+      index += 1
+    }
     if (x === '?' && y === '?') {
       untracked += 1
       files.push({ path, code: 'U' })
@@ -531,7 +537,7 @@ export const register: Register = on => {
         const states: RepoState[] = await Promise.all(
           found.map(async (ref): Promise<RepoState> => {
             try {
-              const run = await git($, ref.path, ['status', '--porcelain=v1', '-b', '--untracked-files=all'])
+              const run = await git($, ref.path, ['status', '--porcelain=v1', '-b', '-z', '--untracked-files=all'])
               if (run.exitCode !== 0) {
                 return emptyState(ref, run.stderr.trim().slice(0, 120) || `exit ${run.exitCode}`)
               }
@@ -623,9 +629,9 @@ export const register: Register = on => {
 
     const rowPress = (key: string, onPress: () => unknown) =>
       isTerminal ? null : (
-        <Box position="absolute" top={0} left={-1} right={-8} bottom={0} alignItems="center" display="none" hover={{ display: 'flex' }}>
+        <Box position="absolute" top={0} left={-1} right={-8} bottom={0} alignItems="center" overflow="hidden" display="none" hover={{ display: 'flex' }}>
           <Button key={key} plain onPress={onPress}>
-            <Text>{'\u00A0'.repeat(40)}</Text>
+            <Text wrap="truncate">{'\u00A0'.repeat(400)}</Text>
           </Button>
         </Box>
       )
@@ -936,6 +942,11 @@ export const register: Register = on => {
         <Box gap={1} alignItems="center">
           {tabButton('changes', 'Changes')}
           {tabButton('graph', 'Graph')}
+          <Box flexGrow={1} justifyContent="flex-end">
+            <Text dimColor size="caption">
+              v{VERSION}
+            </Text>
+          </Box>
         </Box>
         {currentTab === 'graph' ? graphView() : changesView}
       </Box>

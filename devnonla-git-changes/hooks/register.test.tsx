@@ -38,6 +38,7 @@ test('the tree opens a file in the built-in diff, folds a folder and pulls, on e
     const ui = await $.ui.mount({ plugin: 'devnonla-git-changes', component: 'Pane', requestId: 'devnonla-git-changes', props: paneProps, surface })
 
     expect((await ui.find({ type: 'Text', text: /^demo$/ }))?.text).toBe('demo')
+    expect((await ui.find({ type: 'Text', text: /^v\d+\.\d+\.\d+$/ }))?.text).toBe('v0.3.1')
     expect((await ui.find({ type: 'Text', text: /^src\/modules\/ticket$/ }))?.text).toBe('src/modules/ticket')
     expect((await ui.find({ type: 'Text', text: /^ticket\.service\.ts$/ }))?.text).toBe('ticket.service.ts')
 
@@ -54,6 +55,35 @@ test('the tree opens a file in the built-in diff, folds a folder and pulls, on e
 
     await ui.unmount()
   }
+})
+
+test('-z status keeps unicode names and opens the renamed file, not the old one', async ($, on) => {
+  const panes: unknown[] = []
+  const status = ['## main', '?? docs/tiếng việt.md', 'R  src/new name.ts', 'src/old.ts', ' M a.ts', ''].join('\0')
+  on('command.register', () => ({ value: { command: 'repos' } }))
+  on('fs.exists', (_, e) => ({ value: e.path === '/work/demo/.git' }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.run', (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('-z') ? status : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: '/work/demo' }))
+  on('tool.call', (_, e) => {
+    panes.push(e)
+
+    return { result: {} }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/work/demo', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'devnonla-git-changes', component: 'Pane', requestId: 'devnonla-git-changes', props: paneProps, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Text', text: /^old\.ts$/ })).toBeUndefined()
+  await ui.press({ key: 'file:demo:docs/tiếng việt.md' })
+  expect(JSON.stringify(panes.at(-1))).toContain('/work/demo/docs/tiếng việt.md')
+  await ui.press({ key: 'file:demo:src/new name.ts' })
+  expect(JSON.stringify(panes.at(-1))).toContain('/work/demo/src/new name.ts')
+  await ui.press({ key: 'file:demo:a.ts' })
+  expect(JSON.stringify(panes.at(-1))).toContain('/work/demo/a.ts')
+  await ui.unmount()
 })
 
 test('a session inside a sub-repo still lists the whole workspace', async ($, on) => {
